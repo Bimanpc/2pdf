@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>URL → PDF Printer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, Segoe UI, Roboto, sans-serif; margin: 2rem auto; max-width: 800px; padding: 0 1rem; }
+    h1 { font-size: 1.6rem; margin-bottom: 0.75rem; }
+    form { display: grid; gap: 0.75rem; margin: 1rem 0; }
+    label { font-weight: 600; }
+    input[type="text"], select, input[type="number"] {
+      padding: 0.6rem; border: 1px solid #999; border-radius: 8px; width: 100%;
+    }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+    button {
+      background: #2563eb; color: white; padding: 0.7rem 1rem; border: 0; border-radius: 8px; cursor: pointer;
+    }
+    button.secondary { background: #334155; }
+    .note { font-size: 0.9rem; color: #666; }
+    .out { margin-top: 1rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
+    .toggle { display: flex; gap: 0.5rem; align-items: center; }
+  </style>
+</head>
+<body>
+  <h1>URL → PDF Printer</h1>
+  <p class="note">Enter a URL. Choose your PDF settings. Optionally, let the AI generate a smart filename.</p>
+
+  <form id="pdfForm">
+    <div>
+      <label for="url">Page URL</label>
+      <input type="text" id="url" name="url" placeholder="https://example.com/article" required />
+    </div>
+
+    <div class="row">
+      <div>
+        <label for="format">Paper size</label>
+        <select id="format" name="format">
+          <option value="A4">A4</option>
+          <option value="Letter">Letter</option>
+          <option value="Legal">Legal</option>
+          <option value="A3">A3</option>
+        </select>
+      </div>
+      <div>
+        <label for="scale">Scale (0.1–2)</label>
+        <input type="number" id="scale" name="scale" value="1" step="0.1" min="0.1" max="2" />
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="toggle">
+        <input type="checkbox" id="landscape" name="landscape" />
+        <label for="landscape">Landscape</label>
+      </div>
+      <div class="toggle">
+        <input type="checkbox" id="background" name="background" checked />
+        <label for="background">Print backgrounds</label>
+      </div>
+    </div>
+
+    <div class="toggle">
+      <input type="checkbox" id="useLLM" name="useLLM" />
+      <label for="useLLM">Use AI to suggest filename</label>
+    </div>
+
+    <button type="submit">Print to PDF</button>
+    <button type="button" id="previewBtn" class="secondary">Preview title only</button>
+  </form>
+
+  <div id="output" class="out" hidden></div>
+
+  <script>
+    const form = document.getElementById('pdfForm');
+    const out = document.getElementById('output');
+    const previewBtn = document.getElementById('previewBtn');
+
+    async function jsonFetch(url, opts) {
+      const res = await fetch(url, { ...opts, headers: { 'Content-Type': 'application/json', ...(opts.headers||{}) }});
+      if (!res.ok) throw new Error(await res.text());
+      return res;
+    }
+
+    function sanitizeFilename(name) {
+      return name.replace(/[\\/:*?"<>|]+/g, '-').trim().slice(0, 120) || 'document';
+    }
+
+    async function handlePrint(e) {
+      e.preventDefault();
+      out.hidden = true; out.textContent = '';
+
+      const payload = {
+        url: document.getElementById('url').value.trim(),
+        format: document.getElementById('format').value,
+        scale: Number(document.getElementById('scale').value || 1),
+        landscape: document.getElementById('landscape').checked,
+        printBackground: document.getElementById('background').checked,
+        useLLM: document.getElementById('useLLM').checked
+      };
+
+      try {
+        const res = await jsonFetch('/api/print-pdf', { method: 'POST', body: JSON.stringify(payload) });
+        const disp = res.headers.get('Content-Disposition') || '';
+        const filename = /filename="?(.*?)"?$/.exec(disp)?.[1] || 'document.pdf';
+        const blob = await res.blob();
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        URL.revokeObjectURL(link.href);
+        link.remove();
+      } catch (err) {
+        out.hidden = false;
+        out.textContent = 'Error: ' + err.message;
+      }
+    }
+
+    async function handlePreview() {
+      out.hidden = true; out.textContent = '';
+      const url = document.getElementById('url').value.trim();
+      const useLLM = document.getElementById('useLLM').checked;
+      if (!url) { out.hidden = false; out.textContent = 'Enter a URL first.'; return; }
+      if (!useLLM) { out.hidden = false; out.textContent = 'Enable "Use AI" to preview suggested title.'; return; }
+
+      try {
+        const res = await jsonFetch('/api/suggest-title', { method: 'POST', body: JSON.stringify({ url }) });
+        const data = await res.json();
+        out.hidden = false;
+        out.textContent = 'Suggested filename: ' + sanitizeFilename(data.title) + '.pdf';
+      } catch (err) {
+        out.hidden = false;
+        out.textContent = 'Error: ' + err.message;
+      }
+    }
+
+    form.addEventListener('submit', handlePrint);
+    previewBtn.addEventListener('click', handlePreview);
+  </script>
+</body>
+</html>
